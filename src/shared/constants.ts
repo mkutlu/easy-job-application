@@ -10,3 +10,10 @@ export const MAX_TOKENS = 4096;
 // split the mapping call into sequential chunks to stay under context/latency
 // budgets.
 export const CHUNK_FIELD_COUNT = 40;
+
+// Safety ceiling on a single request's estimated input token count (see
+// estimateTokens() in anthropicClient.ts). Chunking already keeps normal
+// requests well under this; it exists to catch a mistake -- a mis-extraction,
+// runaway profile data, etc. -- producing an unexpectedly huge payload, and
+// refuse to send it rather than silently spending on it.
+export const MAX_REQUEST_TOKENS_ESTIMATE = 20000;

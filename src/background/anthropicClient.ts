@@ -2,6 +2,7 @@ import {
   ANTHROPIC_API_URL,
   ANTHROPIC_VERSION,
   CHUNK_FIELD_COUNT,
+  MAX_REQUEST_TOKENS_ESTIMATE,
   MAX_TOKENS,
   MODEL_ID,
 } from "../shared/constants";
@@ -124,6 +125,13 @@ function filterRelevantExtraQA(
   return relevant;
 }
 
+// Rough, deterministic estimate (no tokenizer dependency) -- ~4 chars/token
+// is a standard approximation for English/JSON text. Only needs to be good
+// enough to catch payloads that are wildly larger than expected.
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
 async function callAnthropic(
   apiKey: string,
   descriptors: FieldDescriptor[],
@@ -135,6 +143,15 @@ async function callAnthropic(
     extraQA: filterRelevantExtraQA(profile.extraQA, descriptors),
   };
   const userMessage = JSON.stringify({ pageContext, fields: descriptors, profile: scopedProfile });
+
+  const estimatedTokens = estimateTokens(SYSTEM_PROMPT) + estimateTokens(userMessage);
+  if (estimatedTokens > MAX_REQUEST_TOKENS_ESTIMATE) {
+    throw new Error(
+      `Refusing to send request: estimated ~${estimatedTokens} input tokens exceeds the ` +
+        `${MAX_REQUEST_TOKENS_ESTIMATE} safety limit. This usually means an unexpectedly large ` +
+        `number of fields or profile data was collected -- check the page and your profile size.`,
+    );
+  }
 
   const res = await fetch(ANTHROPIC_API_URL, {
     method: "POST",
