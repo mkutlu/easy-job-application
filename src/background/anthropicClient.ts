@@ -12,6 +12,7 @@ import type {
   PageContext,
   Profile,
   RepeatEntryHints,
+  RepeatSection,
 } from "../shared/types";
 
 // This is the one seam through which the extension talks to a model. The
@@ -206,6 +207,32 @@ async function callAnthropic(
   return coerceResponse(parsed);
 }
 
+function slugify(text: string): string {
+  const slug = text.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return slug || "field";
+}
+
+// entryHints{section: index} reflects how many times that section's modal
+// has already been filled+saved (Overlay.tsx's sectionFillCountRef); if the
+// index has caught up to (or passed) the number of entries actually saved
+// in the profile, there is nothing left to map this modal instance from.
+// The system prompt already tells the model not to reuse an earlier index
+// in this situation, but that's advisory only -- observed in practice
+// reusing the last real entry's data instead of leaving fields in
+// missingInfo. Checking here is deterministic and doesn't depend on the
+// model complying, and it's strictly cheaper too since it skips the API
+// call entirely.
+function findExhaustedSection(
+  profile: Profile,
+  entryHints: RepeatEntryHints | undefined,
+): RepeatSection | null {
+  if (!entryHints) return null;
+  for (const [section, index] of Object.entries(entryHints) as [RepeatSection, number][]) {
+    if (index >= profile[section].length) return section;
+  }
+  return null;
+}
+
 export async function mapFields(
   apiKey: string,
   descriptors: FieldDescriptor[],
@@ -218,6 +245,20 @@ export async function mapFields(
   }
   if (descriptors.length === 0) {
     return { mappings: [], missingInfo: [] };
+  }
+
+  const exhaustedSection = findExhaustedSection(profile, entryHints);
+  if (exhaustedSection) {
+    const count = profile[exhaustedSection].length;
+    return {
+      mappings: [],
+      missingInfo: descriptors.map((d) => ({
+        fieldId: d.id,
+        label: d.label ?? "",
+        question: `Your profile only has ${count} ${exhaustedSection} entr${count === 1 ? "y" : "ies"} saved -- add another one in the extension options if this entry should be filled automatically, or fill it in manually.`,
+        suggestedKey: slugify(d.label ?? d.id),
+      })),
+    };
   }
 
   if (descriptors.length <= CHUNK_FIELD_COUNT) {
