@@ -65,6 +65,13 @@ export interface FieldMapping {
   value: string;
   confidence: Confidence;
   reasoning?: string;
+  // Only meaningful when the request included entryHints: names the single
+  // profile[section][index] key this value was copied from verbatim (e.g.
+  // "startDate"), so background/anthropicClient.ts can cache the field-label
+  // -> key correspondence and reapply it to later entries of the same
+  // repeated modal without another API call. Omitted whenever the value
+  // isn't a direct single-field copy (computed/combined/reasoned about).
+  sourceKey?: string;
 }
 
 export interface MissingInfoItem {
