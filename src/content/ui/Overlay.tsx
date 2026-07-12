@@ -3,7 +3,6 @@ import type {
   AIResponse,
   FieldDescriptor,
   MissingInfoItem,
-  PageContext,
   RepeatSection,
 } from "../../shared/types";
 import { getElement, getGroup } from "../elementRegistry";
@@ -24,28 +23,31 @@ const REPEAT_SECTION_KEYWORDS: [RepeatSection, RegExp][] = [
   ["languages", /\blanguages?\b/i],
 ];
 
-// Picks the heading shared by the most currently-visible fields (the open
-// modal's own heading, when one is open) and falls back to any heading
-// detected elsewhere on the page. Wrong guesses are low-cost: they only ever
-// change which array index is hinted to the AI, never what gets written.
-function detectRepeatSection(
-  descriptors: FieldDescriptor[],
-  pageContext: PageContext,
-): RepeatSection | null {
+// Picks the heading shared by the currently-visible fields (the open modal's
+// own heading, when one is open). Wrong guesses aren't low-cost -- a wrong
+// section desyncs the per-section fill counter from the entries actually on
+// screen (e.g. reusing work[1] a second time, or advancing "education" while
+// a work modal is open) -- so this only trusts per-field sectionHeading data,
+// which is scoped to what's actually visible right now. It deliberately does
+// NOT fall back to pageContext.detectedFormHeadings: that list is scanned
+// from the whole document regardless of visibility, so if the page has, say,
+// both a "Work Experience" and an "Education" heading anywhere in the DOM,
+// using it while per-field headings are unresolved (common when a modal's
+// title isn't a real heading tag) can match the wrong section depending on
+// DOM order alone. No signal at all is preferable to a wrong one here.
+function detectRepeatSection(descriptors: FieldDescriptor[]): RepeatSection | null {
   const headingCounts = new Map<string, number>();
   for (const d of descriptors) {
     if (d.sectionHeading) headingCounts.set(d.sectionHeading, (headingCounts.get(d.sectionHeading) ?? 0) + 1);
   }
-  const candidates = [...headingCounts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([heading]) => heading)
-    .concat(pageContext.detectedFormHeadings);
+  const candidates = [...headingCounts.entries()].sort((a, b) => b[1] - a[1]).map(([heading]) => heading);
 
+  const matches = new Set<RepeatSection>();
   for (const heading of candidates) {
     const match = REPEAT_SECTION_KEYWORDS.find(([, re]) => re.test(heading));
-    if (match) return match[0];
+    if (match) matches.add(match[0]);
   }
-  return null;
+  return matches.size === 1 ? [...matches][0] : null;
 }
 
 type Status =
@@ -128,7 +130,7 @@ export function Overlay() {
         return;
       }
 
-      const repeatSection = detectRepeatSection(found, pageContext);
+      const repeatSection = detectRepeatSection(found);
       const entryHints = repeatSection
         ? { [repeatSection]: sectionFillCountRef.current[repeatSection] }
         : undefined;

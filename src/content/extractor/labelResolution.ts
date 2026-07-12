@@ -73,10 +73,40 @@ function findNearestPrecedingText(el: Element): string | null {
 
 const HEADING_SELECTOR = "h1, h2, h3, h4, h5, h6, legend, [role='heading']";
 
+// Many custom-built modals (an "Add work experience" dialog reopened once
+// per entry is the common case that motivates this) don't mark their title
+// up as a real heading tag -- it's just a styled div -- so the generic
+// ancestor-heading walk below finds nothing for any field inside them. The
+// ARIA dialog contract (role="dialog"/"alertdialog" or aria-modal="true",
+// with aria-labelledby/aria-label naming the dialog) is a standardized,
+// widely-implemented alternative that doesn't depend on visual markup, so
+// it's checked first and is generic across sites, not specific to any one.
+function findAccessibleDialogTitle(el: Element): string | null {
+  const dialog = el.closest('[role="dialog"], [role="alertdialog"], [aria-modal="true"]');
+  if (!dialog) return null;
+
+  const labelledBy = dialog.getAttribute("aria-labelledby");
+  if (labelledBy) {
+    const root = getRoot(dialog);
+    const text = normalizeText(
+      labelledBy
+        .split(/\s+/)
+        .map((refId) => root.getElementById(refId)?.textContent ?? "")
+        .join(" "),
+    );
+    if (text) return text;
+  }
+
+  return normalizeText(dialog.getAttribute("aria-label"));
+}
+
 // Nearest enclosing section/fieldset heading, used to disambiguate
 // repeated field groups (e.g. multiple "Start Date" fields across several
 // work-experience entries).
 export function findSectionHeading(el: Element): string | null {
+  const dialogTitle = findAccessibleDialogTitle(el);
+  if (dialogTitle) return dialogTitle;
+
   const container = el.closest("fieldset, section, [role='group']");
   if (container) {
     const legend = container.querySelector(":scope > legend, :scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6");
