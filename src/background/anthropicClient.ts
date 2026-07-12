@@ -303,6 +303,43 @@ function updateRepeatFieldCache(
   }
 }
 
+// Never trust the model's literal "value" for a field it told us maps
+// cleanly to a single profile key (sourceKey) -- observed reusing an
+// earlier, already-used entry's data for a field even when given the
+// correct target index (see repeat-entry-modal-fill memory, sixth+ follow-
+// ups: entryHints was verifiably correct on the client, so the mismatch
+// had to be the model substituting stale data server-side). Since the
+// model already told us which single profile field the value came from,
+// there's no need to trust its copy of that value at all -- read it
+// straight from profile[section][index][sourceKey] instead, which cannot
+// be wrong. Only fields without a usable sourceKey (something the model
+// had to compute/combine/reason about) keep the model's own value.
+function applyDeterministicValues(
+  profile: Profile,
+  section: RepeatSection,
+  index: number,
+  descriptors: FieldDescriptor[],
+  response: AIResponse,
+): AIResponse {
+  const allowed = ALLOWED_SOURCE_KEYS[section];
+  const byId = new Map(descriptors.map((d) => [d.id, d]));
+  const mappings: AIResponse["mappings"] = [];
+  for (const m of response.mappings) {
+    const sourceKey = m.sourceKey;
+    if (typeof sourceKey === "string" && allowed.has(sourceKey) && byId.has(m.fieldId)) {
+      const resolved = resolveSourceValue(profile, section, index, sourceKey);
+      if (resolved !== undefined) {
+        mappings.push({ ...m, value: resolved });
+      }
+      // else: profile has nothing at this key for this index -- drop the
+      // model's guess rather than trust an unverifiable value.
+      continue;
+    }
+    mappings.push(m);
+  }
+  return { mappings, missingInfo: response.missingInfo };
+}
+
 function slugify(text: string): string {
   const slug = text.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
   return slug || "field";
@@ -364,8 +401,11 @@ export async function mapFields(
   }
 
   if (descriptors.length <= CHUNK_FIELD_COUNT) {
-    const result = await callAnthropic(apiKey, descriptors, pageContext, profile, entryHints);
-    if (singleSection) updateRepeatFieldCache(singleSection, descriptors, result.mappings);
+    let result = await callAnthropic(apiKey, descriptors, pageContext, profile, entryHints);
+    if (singleSection) {
+      updateRepeatFieldCache(singleSection, descriptors, result.mappings);
+      result = applyDeterministicValues(profile, singleSection, entryHints![singleSection]!, descriptors, result);
+    }
     return result;
   }
 
@@ -373,8 +413,11 @@ export async function mapFields(
   const merged: AIResponse = { mappings: [], missingInfo: [] };
   for (let i = 0; i < descriptors.length; i += CHUNK_FIELD_COUNT) {
     const chunk = descriptors.slice(i, i + CHUNK_FIELD_COUNT);
-    const result = await callAnthropic(apiKey, chunk, pageContext, profile, entryHints);
-    if (singleSection) updateRepeatFieldCache(singleSection, chunk, result.mappings);
+    let result = await callAnthropic(apiKey, chunk, pageContext, profile, entryHints);
+    if (singleSection) {
+      updateRepeatFieldCache(singleSection, chunk, result.mappings);
+      result = applyDeterministicValues(profile, singleSection, entryHints![singleSection]!, chunk, result);
+    }
     merged.mappings.push(...result.mappings);
     merged.missingInfo.push(...result.missingInfo);
   }
