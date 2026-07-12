@@ -5,6 +5,7 @@ import { EMPTY_PROFILE, type Profile } from "../shared/types";
 import { ApiKeyEditor } from "./components/ApiKeyEditor";
 import { ApplicationExtrasEditor } from "./components/ApplicationExtrasEditor";
 import { EducationEditor } from "./components/EducationEditor";
+import { LanguagesEditor } from "./components/LanguagesEditor";
 import { ProfileForm } from "./components/ProfileForm";
 import { SkillsEditor } from "./components/SkillsEditor";
 import { WorkExperienceEditor } from "./components/WorkExperienceEditor";
@@ -71,6 +72,10 @@ export function Options() {
           <EducationEditor
             education={profile.education}
             onChange={(education) => updateProfile({ education })}
+          />
+          <LanguagesEditor
+            languages={profile.languages}
+            onChange={(languages) => updateProfile({ languages })}
           />
           <SkillsEditor skills={profile.skills} onChange={(skills) => updateProfile({ skills })} />
           <ApplicationExtrasEditor

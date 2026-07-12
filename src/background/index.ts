@@ -20,7 +20,13 @@ chrome.runtime.onMessage.addListener((message: BackgroundRequest, _sender, sendR
     (async () => {
       try {
         const [apiKey, profile] = await Promise.all([getApiKey(), getProfile()]);
-        const result = await mapFields(apiKey, message.descriptors, message.pageContext, profile);
+        const result = await mapFields(
+          apiKey,
+          message.descriptors,
+          message.pageContext,
+          profile,
+          message.entryHints,
+        );
         const response: MapFieldsResponse = { ok: true, result };
         sendResponse(response);
       } catch (err) {

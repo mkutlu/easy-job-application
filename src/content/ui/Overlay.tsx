@@ -1,10 +1,52 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import type { AIResponse, FieldDescriptor, MissingInfoItem } from "../../shared/types";
+import type {
+  AIResponse,
+  FieldDescriptor,
+  MissingInfoItem,
+  PageContext,
+  RepeatSection,
+} from "../../shared/types";
 import { getElement, getGroup } from "../elementRegistry";
 import { scanForFields } from "../extractor/scan";
 import { requestFieldMapping, saveAnswer } from "../messaging";
 import { writeMappings } from "../writer/domWriter";
 import { MissingInfoPanel } from "./MissingInfoPanel";
+
+// Some ATSes (e.g. Walmart's) only show one work-experience/education/language
+// entry's worth of fields at a time, in an "Add X" modal reopened per entry,
+// rather than a single repeatable list on the page. There's no per-site
+// adapter for this -- just a generic keyword match against whatever heading
+// dominates the currently-visible fields, same spirit as the rest of the
+// extractor's label/section heuristics.
+const REPEAT_SECTION_KEYWORDS: [RepeatSection, RegExp][] = [
+  ["work", /\bwork\s*experience\b|\bemployment\b|\bjob\s*history\b|\bprevious\s*employer/i],
+  ["education", /\beducation\b|\bacademic\b|\bschool(ing)?\b|\bdegree\b/i],
+  ["languages", /\blanguages?\b/i],
+];
+
+// Picks the heading shared by the most currently-visible fields (the open
+// modal's own heading, when one is open) and falls back to any heading
+// detected elsewhere on the page. Wrong guesses are low-cost: they only ever
+// change which array index is hinted to the AI, never what gets written.
+function detectRepeatSection(
+  descriptors: FieldDescriptor[],
+  pageContext: PageContext,
+): RepeatSection | null {
+  const headingCounts = new Map<string, number>();
+  for (const d of descriptors) {
+    if (d.sectionHeading) headingCounts.set(d.sectionHeading, (headingCounts.get(d.sectionHeading) ?? 0) + 1);
+  }
+  const candidates = [...headingCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([heading]) => heading)
+    .concat(pageContext.detectedFormHeadings);
+
+  for (const heading of candidates) {
+    const match = REPEAT_SECTION_KEYWORDS.find(([, re]) => re.test(heading));
+    if (match) return match[0];
+  }
+  return null;
+}
 
 type Status =
   | { kind: "idle" }
@@ -35,6 +77,16 @@ export function Overlay() {
   // deterministic; profile.extraQA (see shared/profileStore.ts) is what
   // carries the answer across page loads/other forms instead.
   const answeredByLabelRef = useRef<Map<string, string>>(new Map());
+
+  // How many times each repeatable section's modal has already been filled
+  // (and had at least one field written) on this page. Passed to the AI as
+  // an index hint so reopening e.g. the "Add work experience" modal a second
+  // time fills work[1] instead of re-filling work[0]. See detectRepeatSection.
+  const sectionFillCountRef = useRef<Record<RepeatSection, number>>({
+    work: 0,
+    education: 0,
+    languages: 0,
+  });
 
   // Reset a stale "done"/"error" status after a large DOM mutation batch
   // (e.g. the site advanced to the next step of a multi-step form), so the
@@ -76,13 +128,25 @@ export function Overlay() {
         return;
       }
 
+      const repeatSection = detectRepeatSection(found, pageContext);
+      const entryHints = repeatSection
+        ? { [repeatSection]: sectionFillCountRef.current[repeatSection] }
+        : undefined;
+
       // Fields whose label matches something already answered this session
       // get written directly and are excluded from the AI request entirely
       // -- no need to spend a call re-deriving an answer we already have.
-      const preAnswered = found.filter((d) => {
-        const key = normalizeLabel(d.label);
-        return key !== null && answeredByLabelRef.current.has(key);
-      });
+      // Skipped entirely inside a detected repeat section: labels like
+      // "Company name" legitimately repeat across entries with a *different*
+      // value each time, so a cached answer from entry 1 must not leak into
+      // entry 2 -- every field there has to go through the AI with the
+      // current entryHints index instead.
+      const preAnswered = repeatSection
+        ? []
+        : found.filter((d) => {
+            const key = normalizeLabel(d.label);
+            return key !== null && answeredByLabelRef.current.has(key);
+          });
       const toSend = found.filter((d) => !preAnswered.includes(d));
 
       const preAnsweredOutcomes =
@@ -100,7 +164,7 @@ export function Overlay() {
       let aiMappings: AIResponse | undefined;
       if (toSend.length > 0) {
         setStatus({ kind: "working", label: `Asking AI to map ${toSend.length} field${toSend.length === 1 ? "" : "s"}...` });
-        const response = await requestFieldMapping(toSend, pageContext);
+        const response = await requestFieldMapping(toSend, pageContext, entryHints);
         if (!response.ok || !response.result) {
           setStatus({ kind: "error", message: response.error ?? "Mapping request failed." });
           return;
@@ -114,6 +178,10 @@ export function Overlay() {
       ];
       const filled = outcomes.filter((o) => o.status === "written").length;
       const skipped = outcomes.filter((o) => o.status === "skipped").length;
+
+      if (repeatSection && filled > 0) {
+        sectionFillCountRef.current[repeatSection] += 1;
+      }
 
       let message = `Filled ${filled} field${filled === 1 ? "" : "s"}.`;
       if (skipped > 0) message += ` ${skipped} skipped (see console for reasons).`;
@@ -168,7 +236,16 @@ export function Overlay() {
           {isWorking ? status.label : status.kind === "done" ? status.message : status.message}
         </div>
       )}
-      <button onClick={runFill} disabled={isWorking} style={buttonStyle(isWorking)}>
+      <button
+        onClick={runFill}
+        // Some ATS modals treat losing DOM focus (or focus arriving outside
+        // their focus trap) as a signal to close themselves. Blocking the
+        // default mousedown focus-shift keeps focus inside the page's open
+        // modal while still letting the click event fire normally.
+        onMouseDown={(e) => e.preventDefault()}
+        disabled={isWorking}
+        style={buttonStyle(isWorking)}
+      >
         {isWorking ? "Working..." : "Fill this form"}
       </button>
     </div>

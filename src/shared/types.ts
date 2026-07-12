@@ -119,6 +119,12 @@ export interface Education {
   endDate: string;
 }
 
+export interface Language {
+  id: string;
+  language: string;
+  fluency?: string;
+}
+
 export interface Skill {
   id: string;
   name: string;
@@ -146,6 +152,7 @@ export interface Profile {
   basics: ProfileBasics;
   work: WorkExperience[];
   education: Education[];
+  languages: Language[];
   skills: Skill[];
   extras: ApplicationExtras;
   // Flat bucket for missingInfo answers keyed by the AI's suggestedKey.
@@ -158,10 +165,17 @@ export const EMPTY_PROFILE: Profile = {
   basics: { name: "", email: "", phone: "", location: {} },
   work: [],
   education: [],
+  languages: [],
   skills: [],
   extras: { eeo: {} },
   extraQA: {},
 };
+
+// Profile array sections that some ATSes only let you fill one entry of at a
+// time (an "Add work experience" modal, reopened per entry) rather than as a
+// single repeatable list on the page. See content/ui/Overlay.tsx.
+export type RepeatSection = "work" | "education" | "languages";
+export type RepeatEntryHints = Partial<Record<RepeatSection, number>>;
 
 // --- Message passing between content script and background service worker ---
 
@@ -169,6 +183,7 @@ export interface MapFieldsRequest {
   type: "MAP_FIELDS";
   descriptors: FieldDescriptor[];
   pageContext: PageContext;
+  entryHints?: RepeatEntryHints;
 }
 
 export interface MapFieldsResponse {

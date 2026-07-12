@@ -3,6 +3,7 @@ import type {
   MapFieldsRequest,
   MapFieldsResponse,
   PageContext,
+  RepeatEntryHints,
   SaveAnswerRequest,
   SaveAnswerResponse,
 } from "../shared/types";
@@ -10,8 +11,9 @@ import type {
 export async function requestFieldMapping(
   descriptors: FieldDescriptor[],
   pageContext: PageContext,
+  entryHints?: RepeatEntryHints,
 ): Promise<MapFieldsResponse> {
-  const message: MapFieldsRequest = { type: "MAP_FIELDS", descriptors, pageContext };
+  const message: MapFieldsRequest = { type: "MAP_FIELDS", descriptors, pageContext, entryHints };
   return chrome.runtime.sendMessage(message);
 }
 

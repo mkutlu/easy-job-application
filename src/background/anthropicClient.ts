@@ -11,6 +11,7 @@ import type {
   FieldDescriptor,
   PageContext,
   Profile,
+  RepeatEntryHints,
 } from "../shared/types";
 
 // This is the one seam through which the extension talks to a model. The
@@ -28,6 +29,7 @@ Rules:
 - "pageContext.jobPosting" (when present) describes the job posting/position itself -- its title, location, employer, employment type -- sourced from the page's own structured data, not from the applicant. Use it only to answer questions about the position (e.g. "which location are you applying to?", "which role is this for?"). Never use it to answer a question about the applicant's own location, address, or citizenship -- those must come from profile.basics/extras or missingInfo, even if pageContext.jobPosting.location happens to look similar.
 - If a field still cannot be confidently filled from the profile (including extraQA) or pageContext.jobPosting where applicable, put it in "missingInfo" instead of guessing a value.
 - For "select", "radio", and "checkbox" fields, the "value" you return must exactly match one of that field's provided "options" strings (character for character). If none fit, use missingInfo instead.
+- If the request includes "entryHints" (e.g. { "work": 1 }), the fields being mapped are a single repeated sub-entry form -- such as an "Add work experience" modal that only ever holds one entry's worth of fields on screen at a time, reopened once per entry. For each key present in entryHints, map those fields from profile.<key>[index] using the given zero-based index specifically, not index 0, because lower indices were already filled and saved in earlier instances of this same modal. If profile.<key> has no entry at that index, leave those fields in missingInfo instead of reusing an already-used entry.
 - Respond with JSON only. No prose, no markdown code fences, no explanation outside the JSON.
 
 Respond with exactly this JSON shape:
@@ -137,12 +139,18 @@ async function callAnthropic(
   descriptors: FieldDescriptor[],
   pageContext: PageContext,
   profile: Profile,
+  entryHints: RepeatEntryHints | undefined,
 ): Promise<AIResponse> {
   const scopedProfile: Profile = {
     ...profile,
     extraQA: filterRelevantExtraQA(profile.extraQA, descriptors),
   };
-  const userMessage = JSON.stringify({ pageContext, fields: descriptors, profile: scopedProfile });
+  const userMessage = JSON.stringify({
+    pageContext,
+    fields: descriptors,
+    profile: scopedProfile,
+    ...(entryHints && Object.keys(entryHints).length > 0 ? { entryHints } : {}),
+  });
 
   const estimatedTokens = estimateTokens(SYSTEM_PROMPT) + estimateTokens(userMessage);
   if (estimatedTokens > MAX_REQUEST_TOKENS_ESTIMATE) {
@@ -202,6 +210,7 @@ export async function mapFields(
   descriptors: FieldDescriptor[],
   pageContext: PageContext,
   profile: Profile,
+  entryHints?: RepeatEntryHints,
 ): Promise<AIResponse> {
   if (!apiKey) {
     throw new Error("No Anthropic API key configured. Set one in the extension options page.");
@@ -211,14 +220,14 @@ export async function mapFields(
   }
 
   if (descriptors.length <= CHUNK_FIELD_COUNT) {
-    return callAnthropic(apiKey, descriptors, pageContext, profile);
+    return callAnthropic(apiKey, descriptors, pageContext, profile, entryHints);
   }
 
   // Chunk large forms into sequential calls and merge results.
   const merged: AIResponse = { mappings: [], missingInfo: [] };
   for (let i = 0; i < descriptors.length; i += CHUNK_FIELD_COUNT) {
     const chunk = descriptors.slice(i, i + CHUNK_FIELD_COUNT);
-    const result = await callAnthropic(apiKey, chunk, pageContext, profile);
+    const result = await callAnthropic(apiKey, chunk, pageContext, profile, entryHints);
     merged.mappings.push(...result.mappings);
     merged.missingInfo.push(...result.missingInfo);
   }
