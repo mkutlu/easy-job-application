@@ -59,7 +59,22 @@ function detectRepeatSection(descriptors: FieldDescriptor[]): RepeatSection | nu
 // (and re-risking) heading detection on every click.
 function computeShapeSignature(descriptors: FieldDescriptor[]): string {
   return descriptors
-    .map((d) => normalizeLabel(d.label) ?? `#${d.type}:${d.id}`)
+    .map((d) => {
+      const label = normalizeLabel(d.label);
+      if (label) return label;
+      // d.id is an ephemeral per-scan id (see FieldDescriptor) -- it's
+      // different on every single scan even for the exact same on-screen
+      // field, so it must never be used here. Using it as the fallback key
+      // previously made the signature differ on every open whenever any
+      // field in the modal had no resolvable label (common for custom date
+      // pickers), which meant the shape never matched a cached entry --
+      // every open was treated as a brand-new modal with count reset to 0,
+      // so every entry silently got filled from profile[section][0]
+      // regardless of which one was actually open. Built from stable DOM
+      // attributes instead, none of which change between reopens of the
+      // same modal.
+      return `#${d.type}:${d.name ?? ""}:${d.placeholder ?? ""}:${d.autocomplete ?? ""}:${d.options.join(",")}:${d.sectionHeading ?? ""}`;
+    })
     .sort()
     .join("|");
 }
