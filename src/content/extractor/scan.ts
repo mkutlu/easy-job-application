@@ -1,3 +1,4 @@
+import { OVERLAY_HOST_ID } from "../../shared/constants";
 import type { FieldDescriptor, FieldType, PageContext } from "../../shared/types";
 import { registerElement, registerGroup, resetRegistry } from "../elementRegistry";
 import { groupRadiosAndCheckboxes } from "./groups";
@@ -8,6 +9,47 @@ import { walkAllRoots } from "./shadowDom";
 
 const HEADING_SELECTOR = "h1, h2, h3, h4, h5, h6, legend";
 let idCounter = 0;
+
+const MODAL_ROLE_SELECTOR = '[role="dialog"], [role="alertdialog"], [aria-modal="true"]';
+
+function isLargeOverlay(el: Element): boolean {
+  const style = getComputedStyle(el);
+  if (style.position !== "fixed" && style.position !== "absolute") return false;
+  const rect = el.getBoundingClientRect();
+  return rect.width >= window.innerWidth * 0.4 && rect.height >= window.innerHeight * 0.4;
+}
+
+// When a modal/dialog is open, fields on the page behind it are usually
+// still technically "visible" by isVisible()'s definition (non-zero rect,
+// display/visibility not hidden) even though they're covered by the modal's
+// backdrop and unreachable to the user. Left unscoped, every scan while a
+// modal is open re-includes the whole page behind it -- re-surfacing
+// missingInfo questions the user already answered, diluting/misdirecting
+// section detection for repeat-entry modals (see Overlay.tsx), and bloating
+// the request. Detected two ways, in priority order: the standard ARIA
+// dialog contract (works regardless of visual styling), and -- for modals
+// that skip that markup -- the largest, highest z-index fixed/absolute
+// direct child of <body>, which is how the overwhelming majority of
+// portal-rendered modals (React/Vue/etc.) attach to the page regardless of
+// how their contents are styled. Neither is site-specific.
+function findOpenModal(doc: Document): Element | null {
+  let ariaModal: Element | null = null;
+  walkAllRoots(doc, (root) => {
+    root.querySelectorAll(MODAL_ROLE_SELECTOR).forEach((el) => {
+      if (isVisible(el)) ariaModal = el; // last in DOM order wins if several are open/nested
+    });
+  });
+  if (ariaModal) return ariaModal;
+
+  let best: { el: Element; z: number } | null = null;
+  for (const el of Array.from(doc.body?.children ?? [])) {
+    if (el.id === OVERLAY_HOST_ID || !isVisible(el) || !isLargeOverlay(el)) continue;
+    const z = Number(getComputedStyle(el).zIndex);
+    if (!Number.isFinite(z)) continue;
+    if (!best || z > best.z) best = { el, z };
+  }
+  return best?.el ?? null;
+}
 
 function normalizeAttr(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
@@ -165,12 +207,17 @@ export function scanForFields(): ScanResult {
   const otherControls: HTMLElement[] = [];
 
   for (const doc of documents) {
+    const openModal = findOpenModal(doc);
     walkAllRoots(doc, (root) => {
       root.querySelectorAll("input").forEach((el) => {
-        if (isVisible(el) && !isPageChrome(el)) candidateInputs.push(el as HTMLInputElement);
+        if (isVisible(el) && !isPageChrome(el) && (!openModal || openModal.contains(el))) {
+          candidateInputs.push(el as HTMLInputElement);
+        }
       });
       root.querySelectorAll("select, textarea").forEach((el) => {
-        if (isVisible(el) && !isPageChrome(el)) otherControls.push(el as HTMLElement);
+        if (isVisible(el) && !isPageChrome(el) && (!openModal || openModal.contains(el))) {
+          otherControls.push(el as HTMLElement);
+        }
       });
     });
   }

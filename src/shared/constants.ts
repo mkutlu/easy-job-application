@@ -17,3 +17,8 @@ export const CHUNK_FIELD_COUNT = 40;
 // runaway profile data, etc. -- producing an unexpectedly huge payload, and
 // refuse to send it rather than silently spending on it.
 export const MAX_REQUEST_TOKENS_ESTIMATE = 20000;
+
+// Shared between content/index.tsx (which sets it) and the extractor's
+// open-overlay heuristic (which must never mistake the floating "Fill this
+// form" host for a page modal).
+export const OVERLAY_HOST_ID = "easy-job-application-host";

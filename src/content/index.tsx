@@ -1,7 +1,8 @@
 import { createRoot } from "react-dom/client";
+import { OVERLAY_HOST_ID } from "../shared/constants";
 import { Overlay } from "./ui/Overlay";
 
-const HOST_ID = "easy-job-application-host";
+const HOST_ID = OVERLAY_HOST_ID;
 
 // Clicking our floating button dispatches a real event that bubbles out of
 // the shadow tree to `document`, retargeted as this host element. Lots of
