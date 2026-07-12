@@ -50,6 +50,20 @@ function detectRepeatSection(descriptors: FieldDescriptor[]): RepeatSection | nu
   return matches.size === 1 ? [...matches][0] : null;
 }
 
+// Identifies "the same modal reopened" independent of heading detection --
+// a fresh "Add work experience" modal always presents the same set of
+// field labels every time it's opened, regardless of which entry it's
+// about to hold. Used to cache detectRepeatSection's result per shape (see
+// sectionInstancesRef) so a single successful heading match is trusted for
+// every subsequent open of that same modal, rather than re-running
+// (and re-risking) heading detection on every click.
+function computeShapeSignature(descriptors: FieldDescriptor[]): string {
+  return descriptors
+    .map((d) => normalizeLabel(d.label) ?? `#${d.type}:${d.id}`)
+    .sort()
+    .join("|");
+}
+
 type Status =
   | { kind: "idle" }
   | { kind: "working"; label: string }
@@ -80,15 +94,19 @@ export function Overlay() {
   // carries the answer across page loads/other forms instead.
   const answeredByLabelRef = useRef<Map<string, string>>(new Map());
 
-  // How many times each repeatable section's modal has already been filled
-  // (and had at least one field written) on this page. Passed to the AI as
-  // an index hint so reopening e.g. the "Add work experience" modal a second
-  // time fills work[1] instead of re-filling work[0]. See detectRepeatSection.
-  const sectionFillCountRef = useRef<Record<RepeatSection, number>>({
-    work: 0,
-    education: 0,
-    languages: 0,
-  });
+  // Tracks each distinct repeat-entry modal (keyed by computeShapeSignature
+  // -- its field labels, which are identical every time that modal is
+  // reopened) to which RepeatSection it was detected as and how many times
+  // it's already been filled (and had at least one field written) on this
+  // page. Keyed by shape rather than by RepeatSection directly so that
+  // detectRepeatSection's heading-keyword heuristic only has to succeed
+  // ONCE per modal, the first time it's opened -- every later open of the
+  // exact same modal reuses that cached section instead of re-running
+  // (and re-risking) heading detection, since a flaky/ambiguous heading
+  // match on a later open was observed desyncing the fill index (see
+  // repeat-entry-modal-fill memory). count is the next zero-based index to
+  // fill from profile[section], passed to the AI as entryHints.
+  const sectionInstancesRef = useRef<Map<string, { section: RepeatSection; count: number }>>(new Map());
 
   // Reset a stale "done"/"error" status after a large DOM mutation batch
   // (e.g. the site advanced to the next step of a multi-step form), so the
@@ -130,10 +148,29 @@ export function Overlay() {
         return;
       }
 
-      const repeatSection = detectRepeatSection(found);
-      const entryHints = repeatSection
-        ? { [repeatSection]: sectionFillCountRef.current[repeatSection] }
-        : undefined;
+      const shapeSignature = computeShapeSignature(found);
+      let instance = sectionInstancesRef.current.get(shapeSignature);
+      if (!instance) {
+        const detected = detectRepeatSection(found);
+        if (detected) {
+          instance = { section: detected, count: 0 };
+          sectionInstancesRef.current.set(shapeSignature, instance);
+        }
+        console.info("[easy-job-application] repeat-entry detection", {
+          shapeSignature,
+          detected,
+          cached: false,
+        });
+      } else {
+        console.info("[easy-job-application] repeat-entry detection", {
+          shapeSignature,
+          detected: instance.section,
+          count: instance.count,
+          cached: true,
+        });
+      }
+      const repeatSection = instance?.section ?? null;
+      const entryHints = instance ? { [instance.section]: instance.count } : undefined;
 
       // Fields whose label matches something already answered this session
       // get written directly and are excluded from the AI request entirely
@@ -181,8 +218,14 @@ export function Overlay() {
       const filled = outcomes.filter((o) => o.status === "written").length;
       const skipped = outcomes.filter((o) => o.status === "skipped").length;
 
-      if (repeatSection && filled > 0) {
-        sectionFillCountRef.current[repeatSection] += 1;
+      if (instance && filled === 0) {
+        console.warn(
+          "[easy-job-application] repeat-entry fill wrote 0 fields -- entry index will NOT advance, next click will retry the same index",
+          { shapeSignature, section: instance.section, count: instance.count },
+        );
+      }
+      if (instance && filled > 0) {
+        instance.count += 1;
       }
 
       let message = `Filled ${filled} field${filled === 1 ? "" : "s"}.`;
